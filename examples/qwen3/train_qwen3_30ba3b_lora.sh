@@ -1,26 +1,15 @@
 #!/bin/bash
-# Qwen3-30B-A3B LoRA SFT
+# Qwen3-30B-A3B LoRA SFT（配置与 train_qwen3_8b_lora.sh 一致，MoE 并行部分除外）
 #
 # 用法：
 #   bash train_qwen3_30ba3b_lora.sh <模型路径> <数据集路径> <RCCLENV 路径>
-# 例：
-#   bash train_qwen3_30ba3b_lora.sh \
-#       Qwen/Qwen3-30B-A3B /cfs/ms-swift/data/sft.jsonl /cfs/megatron-code/ms-swift/env.sh
 #
-# 多机由 run_train.sh 调起，NNODES / MASTER_ADDR / NODE_RANK / MASTER_PORT
-# 从环境变量读取。
-#
-# 预调参数（单机 8 卡）：TP=1 CP=1 PP=1 EP=8，DP=8，MBS=2，GBS=64
-# EP=8 要求 DP 能被 8 整除；1 节点 DP=8 即可，2 节点 DP=16。
+# 预调参数（单机 8 卡）：TP=1 CP=1 PP=1 EP=8，DP=8，MBS=1，GBS=32
 set -e
 
 MODEL=${1:-Qwen/Qwen3-30B-A3B}
-DATASET=${2:-}
+DATASET=${2:-dataset.jsonl}
 RCCLENV=${3:-env.sh}
-if [ -z "${DATASET}" ]; then
-    DATASET='AI-ModelScope/alpaca-gpt4-data-zh#500 AI-ModelScope/alpaca-gpt4-data-en#500 swift/self-cognition#500'
-fi
-read -r -a DATASETS <<< "${DATASET}"
 
 NNODES=${NNODES:-1}
 MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -37,16 +26,9 @@ export GPU_MAX_HW_QUEUES=4
 export NVTE_USE_HIPBLASLT_GROUPEDGEMM=1
 export HSA_NO_SCRATCH_RECLAIM=1
 
-WORLD_SIZE=$(( NNODES * NPROC_PER_NODE ))
-DP=$(( WORLD_SIZE / (1 * 1 * 1) ))
-if [ $(( DP % 8 )) -ne 0 ]; then
-    echo "切分不匹配: world_size=${WORLD_SIZE} DP=${DP}，EP=8 需要 DP 能整除 8（至少 1 节点）" >&2
-    exit 1
-fi
+echo "[qwen3-30ba3b-lora] model=${MODEL} nodes=${NNODES} TP=1 CP=1 PP=1 EP=8 DP=8 MBS=1 GBS=32"
 
-echo "[qwen3-30ba3b-lora] model=${MODEL} nodes=${NNODES} TP=1 CP=1 PP=1 EP=8 DP=${DP} MBS=2 GBS=64"
-
-PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
+# PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
 NNODES=${NNODES} \
 NODE_RANK=${NODE_RANK} \
 MASTER_ADDR=${MASTER_ADDR} \
@@ -56,7 +38,12 @@ HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES} \
 megatron sft \
     --model ${MODEL} \
     --save_safetensors true \
-    --dataset "${DATASETS[@]}" \
+    --dataset "${DATASET}" \
+    --packing true \
+    --max_length 4096 \
+    --system 'You are a helpful assistant.' \
+    --dataloader_num_workers 8 \
+    --dataset_num_proc 8 \
     --load_from_cache_file true \
     --split_dataset_ratio 0.01 \
     --tuner_type lora \
@@ -66,37 +53,26 @@ megatron sft \
     --merge_lora false \
     --finetune true \
     --tensor_model_parallel_size 1 \
+    --sequence_parallel true \
     --context_parallel_size 1 \
     --pipeline_model_parallel_size 1 \
     --expert_model_parallel_size 8 \
     --expert_tensor_parallel_size 1 \
-    --moe_permute_fusion true \
-    --moe_grouped_gemm true \
-    --moe_shared_expert_overlap true \
-    --moe_aux_loss_coeff 1e-6 \
-    --moe_router_fusion true \
-    --micro_batch_size 2 \
-    --global_batch_size 64 \
-    --num_train_epochs 1 \
+    --micro_batch_size 1 \
+    --global_batch_size 32 \
+    --train_iters 20 \
     --cross_entropy_loss_fusion true \
     --lr 1e-4 \
     --lr_warmup_fraction 0.05 \
     --min_lr 1e-5 \
-    --sequence_parallel true \
-    --packing true \
     --attention_backend flash \
-    --max_length 2048 \
-    --system 'You are a helpful assistant.' \
-    --model_author swift \
-    --model_name swift-robot \
-    --dataloader_num_workers 8 \
-    --dataset_num_proc 8 \
-    --recompute_granularity full \
-    --recompute_method uniform \
-    --recompute_num_layers 1 \
+    --use_distributed_optimizer true \
+    --moe_permute_fusion true \
+    --moe_grouped_gemm true \
+    --moe_shared_expert_overlap true \
+    --moe_aux_loss_coeff 1e-6 \
+    --megatron_extra_kwargs '{"moe_router_fusion": true,}' \
+    --logging_steps 1 \
     --no_save_optim true \
     --no_save_rng true \
     --output_dir ${OUTPUT_DIR}
-
-# deepep（可选）：
-# --megatron_extra_kwargs '{"moe_router_fusion": true, "moe_token_dispatcher_type": "flex", "moe_flex_dispatcher_backend": "deepep", "moe_deepep_num_sms": 60}'
