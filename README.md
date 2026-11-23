@@ -47,6 +47,11 @@ grpo/RL
 --load_from_cache_file true 从缓存加载ckpt生效
 --num_train_epochs 训练集过几遍, 会覆盖train_iters
 
+add_non_thinking_prefix true 对于没有think数据集, 自动补上一个空的think的标识
+loss_scale ignore_empty_think 将空think块的loss权重设置为0. 可选参数:
+- default: SFT, 只对 assistant 回复算 loss（含历史轮，权重 1）；system/user/多模态 token 不算	
+- last_round: RLHF（DPO/GRPO 等）, 只对最后一轮 assistant 回复算 loss（最后一个 user 之后的内容）
+- all: swift pt, 所有 token 都算 loss，包括 system/user
 
 预训练:
 MODEL=/public/opendas/DL_DATA/llm-models/qwen3/Qwen3-8B DATASET=/public/home/wangxj3/Downloads/model_datasets/datasets/oscar-en-10k/oscar-en-10k.jsonl RCCLENV=/public/home/wangxj3/Projects/ms-swift-das/examples/env.sh MODEL_KEY=qwen3_8b bash run_train.sh hostfile 1 pretrain
@@ -57,3 +62,14 @@ MODEL=/public/opendas/DL_DATA/llm-models/qwen3/Qwen3-8B DATASET=/public/home/wan
 lora:
 MODEL=/public/opendas/DL_DATA/llm-models/qwen3/Qwen3-8B DATASET=/public/home/wangxj3/Downloads/model_datasets/datasets/Chinese-DeepSeek-R1-Distill-data-110k-SFT/distill_r1_110k_sft.jsonl RCCLENV=/public/home/wangxj3/Projects/ms-swift-das/examples/env.sh MODEL_KEY=qwen3_8b bash run_train.sh hostfile 1 lora
 
+多模态模型的训练:
+只跑纯文本模型: --language_model_only true
+加载vit但是只训练纯文本: --language_model_only false, --freeze_vit true, --freeze_llm false, freeze_aligner true
+
+
+简单调参
+optimizer_cpu_offload
+
+--recompute_granularity full \
+    --recompute_method uniform \
+    --recompute_num_layers 1 \

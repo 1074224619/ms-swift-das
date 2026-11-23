@@ -80,5 +80,5 @@ megatron sft \
     --no_save_optim true \
     --no_save_rng true \
     --output_dir ${OUTPUT_DIR} \
-    --external_plugins ../plugin/torch_profiling_plugin.py \
+    --external_plugins ../plugin/torch_profiler_plugin.py \
     --callbacks torch_profiler 
