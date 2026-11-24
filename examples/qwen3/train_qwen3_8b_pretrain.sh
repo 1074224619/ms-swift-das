@@ -70,7 +70,7 @@ megatron pt \
     --attention_backend flash \
     --dataloader_num_workers 8 \
     --dataset_num_proc 8 \
-    --logging_steps 1 \ 
+    --logging_steps 1 \
     --save_steps 0 \
     --no_save_optim true \
     --no_save_rng true \

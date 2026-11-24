@@ -63,7 +63,7 @@ megatron sft \
     --tuner_type lora \
     --lora_rank 8 \
     --lora_alpha 32 \
-    --target_modules all-linear \
+    --target_modules linear_qkv linear_proj in_proj out_proj \
     --finetune true \
     --tensor_model_parallel_size 1 \
     --sequence_parallel true \
@@ -76,7 +76,7 @@ megatron sft \
     --moe_aux_loss_coeff 1e-6 \
     --megatron_extra_kwargs '{"moe_router_fusion": true,}' \
     --micro_batch_size 1 \
-    --global_batch_size 16 \
+    --global_batch_size 32 \
     --train_iters 20 \
     --freeze_llm false \
     --freeze_vit true \

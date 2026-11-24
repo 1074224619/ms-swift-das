@@ -34,9 +34,9 @@ export GPU_MAX_HW_QUEUES=4
 export NVTE_USE_HIPBLASLT_GROUPEDGEMM=1
 export HSA_NO_SCRATCH_RECLAIM=1
 
-echo "[qwen3-8b-lora] model=${MODEL} nodes=${NNODES} TP=2 CP=1 PP=1 EP=1 DP=4 MBS=1 GBS=32"
+echo "[qwen3-8b-lora] model=${MODEL} nodes=${NNODES} TP=1 CP=1 PP=1 EP=1 DP=4 MBS=1 GBS=32"
 
-PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
+# PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
 NNODES=${NNODES} \
 NODE_RANK=${NODE_RANK} \
 MASTER_ADDR=${MASTER_ADDR} \
@@ -48,7 +48,7 @@ megatron sft \
     --save_safetensors true \
     --dataset "${DATASET}" \
     --packing true \
-    --max_length 2048 \
+    --max_length 4096 \
     --system 'You are a helpful assistant.' \
     --dataloader_num_workers 8 \
     --dataset_num_proc 8 \
@@ -60,7 +60,7 @@ megatron sft \
     --target_modules all-linear \
     --merge_lora false \
     --finetune true \
-    --tensor_model_parallel_size 2 \
+    --tensor_model_parallel_size 1 \
     --sequence_parallel true \
     --context_parallel_size 1 \
     --pipeline_model_parallel_size 1 \
