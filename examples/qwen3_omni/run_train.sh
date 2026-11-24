@@ -22,9 +22,11 @@ case ${TASK} in
 esac
 
 script=train_qwen3_omni_${TASK}.sh
-MODEL=${MODEL:-Qwen/Qwen3-Omni-30B-A3B-Instruct}
+MODEL=${MODEL:-/public/home/wangxj3/Downloads/model_datasets/models/Qwen3-Omni-30B-A3B-Instruct}
+DATA_DIR=${DATA_DIR:-/public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni}
 RCCLENV=${RCCLENV:-/cfs/megatron-code/ms-swift/env.sh}
 export RCCLENV
+export DATA_DIR
 LOG_DIR=${LOG_DIR:-logs}
 mkdir -p ${LOG_DIR}
 
@@ -39,4 +41,4 @@ mpirun -np ${node_num} --hostfile ${HOSTFILE} \
     --bind-to none \
     --mca plm_rsh_no_tree_spawn 1 \
     --mca plm_rsh_args "-p ${SSH_PORT:-29511}" \
-    bash -c "bash ${script} ${node_num} ${HOST} ${MODEL}" 2>&1 | tee ${LOG_DIR}/${script}_$(date +%Y-%m-%d_%H:%M:%S).log
+    bash -c "DATA_DIR=${DATA_DIR} bash ${script} ${node_num} ${HOST} ${MODEL}" 2>&1 | tee ${LOG_DIR}/${script}_$(date +%Y-%m-%d_%H:%M:%S).log

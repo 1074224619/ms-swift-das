@@ -22,7 +22,7 @@ set -e
 
 NNODES=${1:-1}
 MASTER_ADDR=${2:-127.0.0.1}
-MODEL=${3:-Qwen/Qwen3-Omni-30B-A3B-Instruct}
+MODEL=${3:-/public/home/wangxj3/Downloads/model_datasets/models/Qwen3-Omni-30B-A3B-Instruct}
 
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}

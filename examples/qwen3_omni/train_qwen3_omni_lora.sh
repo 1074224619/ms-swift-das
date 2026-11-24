@@ -4,26 +4,35 @@
 # 一般通过 run_train.sh 启动：
 #   bash run_train.sh <hostfile> <node_num> lora
 # 单机调试也可以直接执行：
-#   bash train_qwen3_omni_lora.sh 1 127.0.0.1 Qwen/Qwen3-Omni-30B-A3B-Instruct
+#   bash train_qwen3_omni_lora.sh 1 127.0.0.1 /path/to/Qwen3-Omni-30B-A3B-Instruct
 #
 # 参数：$1=NNODES  $2=MASTER_ADDR  $3=模型路径
 # 可用环境变量：NPROC_PER_NODE / HIP_VISIBLE_DEVICES / OUTPUT_DIR
+#               DATA_DIR / SHAREGPT4V_N / TULU_N / VIDEO_N
 #               RCCLENV / MASTER_PORT
 # 多机额外设置：NCCL_SOCKET_IFNAME GLOO_SOCKET_IFNAME（网卡名用 ifconfig 查看）
 #               NCCL_IB_HCA NCCL_IB_GID_INDEX（IB/RoCE 环境）
 #
 # 基于 ms-swift 的 examples/megatron/multimodal/omni/moe.sh 整理，
-# 混合文本 / OCR / 语音数据。
+# 使用 VeOmni 格式的混合数据（ShareGPT4V 图文描述 / tulu-3 纯文本 / LLaVA-Video 视频）。
+# 数据准备见 guide.md；video.json 需先用 prepare_data.py 转成 video_swift.json。
 # 训练后可用 megatron export --merge_lora true 合并权重。
 set -e
 
 NNODES=${1:-1}
 MASTER_ADDR=${2:-127.0.0.1}
-MODEL=${3:-Qwen/Qwen3-Omni-30B-A3B-Instruct}
+MODEL=${3:-/public/home/wangxj3/Downloads/model_datasets/models/Qwen3-Omni-30B-A3B-Instruct}
 
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 OUTPUT_DIR=${OUTPUT_DIR:-megatron_output/Qwen3-Omni-30B-A3B-Instruct-lora}
+
+# VeOmni 数据集目录（数据集中的 images/videos 为相对路径，以该目录为根）
+DATA_DIR=${DATA_DIR:-/public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni}
+# 各数据集采样条数，可按配比调整
+SHAREGPT4V_N=${SHAREGPT4V_N:-10000}
+TULU_N=${TULU_N:-5000}
+VIDEO_N=${VIDEO_N:-5753}
 
 # 集群环境（DTK / RCCL），按实际路径修改
 if [ -f /opt/dtk/env.sh ]; then
@@ -38,6 +47,8 @@ fi
 export GPU_MAX_HW_QUEUES=4
 export NVTE_USE_HIPBLASLT_GROUPEDGEMM=1
 export HSA_NO_SCRATCH_RECLAIM=1
+# 相对路径的多媒体文件以 DATA_DIR 为根
+export ROOT_IMAGE_DIR="${DATA_DIR}"
 
 PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
 NNODES=${NNODES} \
@@ -54,9 +65,9 @@ megatron sft \
     --model ${MODEL} \
     --save_safetensors true \
     --merge_lora false \
-    --dataset 'AI-ModelScope/alpaca-gpt4-data-zh#10000' \
-              'AI-ModelScope/LaTeX_OCR:human_handwrite#5000' \
-              'speech_asr/speech_asr_aishell1_trainsets:validation#5000' \
+    --dataset "${DATA_DIR}/sharegpt4v_instruct_gpt4-vision_cap100k_coco.json#${SHAREGPT4V_N}" \
+              "${DATA_DIR}/tulu-3-sft-mixture/data#${TULU_N}" \
+              "${DATA_DIR}/video_swift.json#${VIDEO_N}" \
     --load_from_cache_file true \
     --split_dataset_ratio 0.01 \
     --tuner_type lora \

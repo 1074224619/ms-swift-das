@@ -1,4 +1,4 @@
-# ms-swift-das Qwen3 guide
+# ms-swift-das Qwen3.5 guide
 
 ## 创建容器
 ```bash
