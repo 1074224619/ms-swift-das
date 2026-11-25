@@ -1,0 +1,145 @@
+# Rebased for tastelikefeet/Megatron-LM dsv41-pr7224-engram-local (827e940e6).
+# Original: megatron_hip_dsa.patch (generated against tastelikefeet/Megatron-LM main).
+# Apply from the Megatron-LM repo root: git apply megatron_hip_dsa_dsv41.patch
+diff --git a/megatron/core/transformer/experimental_attention_variant/csa_utils/fused_sparse_attention.py b/megatron/core/transformer/experimental_attention_variant/csa_utils/fused_sparse_attention.py
+index 0fa26f4..007c95f 100644
+--- a/megatron/core/transformer/experimental_attention_variant/csa_utils/fused_sparse_attention.py
++++ b/megatron/core/transformer/experimental_attention_variant/csa_utils/fused_sparse_attention.py
+@@ -716,19 +716,26 @@ def _csa_fwd_flash_mla(
+     indices = topk_idxs.unsqueeze(1)  # (total_S_q, 1, TopK_padded) h_kv=1
+ 
+     with torch.cuda.nvtx.range("flash_mla_sparse_fwd"):
+-        res = _flash_mla_sparse_fwd(
+-            q,
+-            kv_3d,
+-            indices,
+-            softmax_scale,
+-            d_v=d_v,
++        from hip_dsa import sparse_attn_forward, sparse_attn_fwd_indexer
++
++        dsa_sparse_fwd = sparse_attn_fwd_indexer if indexer_topk > 0 else sparse_attn_forward
++        kwargs = dict(
++            q=q,
++            kv=kv_3d,
+             attn_sink=attn_sink,
++            topk_idxs=topk_idxs,
++            softmax_scale=softmax_scale,
+             topk_length=topk_length,
+-            indexer_topk=indexer_topk,
+         )
++        if indexer_topk > 0:
++            kwargs["indexer_topk"] = indexer_topk
++        res = dsa_sparse_fwd(**kwargs)
++
+         if indexer_topk > 0:
+             out, _max_logits, lse, lse_indexer = res
+         else:
++            if len(res) == 2:
++                res = (res[0], None, res[1])
+             out, _max_logits, lse = res
+             lse_indexer = None
+ 
+@@ -742,16 +749,19 @@ def _csa_fwd_flash_mla(
+ 
+ 
+ def _ensure_dsa_namespace():
+-    """Lazily import the cudnn-frontend DSA namespace."""
++    """Lazily import the HCU (hip_dsa) DSA namespace.
++
++    Only the namespace source changes: it is still cached in ``_DSA``, so every
++    ``_DSA.<op>`` call site in this module is untouched.
++    """
+     global _DSA
+     if _DSA is not None:
+         return
+     try:
+-        from cudnn import DSA as _ns
++        from hip_dsa import DSA as _ns
+     except ImportError as e:
+         raise ImportError(
+-            "cudnn-frontend DSA namespace not available. Install with "
+-            "`pip install nvidia-cudnn-frontend[cutedsl]`."
++            "hip_dsa DSA namespace not available. Install the hip_dsa package."
+         ) from e
+     _DSA = _ns
+ 
+diff --git a/megatron/core/transformer/experimental_attention_variant/dsa_cudnn_kernels.py b/megatron/core/transformer/experimental_attention_variant/dsa_cudnn_kernels.py
+index e6013f4..ca8a814 100644
+--- a/megatron/core/transformer/experimental_attention_variant/dsa_cudnn_kernels.py
++++ b/megatron/core/transformer/experimental_attention_variant/dsa_cudnn_kernels.py
+@@ -906,15 +906,15 @@ def _dsa_fwd_flash_mla(
+         attn_sink = attn_sink_padded
+ 
+     with torch.cuda.nvtx.range("flash_mla_sparse_fwd"):
+-        out, _max_logits, lse = _flash_mla_sparse_fwd(
+-            q,
+-            kv_3d,
+-            indices,
+-            softmax_scale,
+-            d_v=d_v,
++        from hip_dsa import sparse_attn_forward
++
++        out, lse = sparse_attn_forward(
++            q=q,
++            kv=kv_3d,
+             attn_sink=attn_sink,
++            topk_idxs=topk_idxs,
++            softmax_scale=softmax_scale,
+             topk_length=topk_length,
+-            indexer_topk=0,
+         )
+ 
+     if padded_num_heads != actual_num_heads:
+@@ -925,16 +925,19 @@ def _dsa_fwd_flash_mla(
+ 
+ 
+ def _ensure_dsa_namespace() -> None:
+-    """Lazily import the cudnn-frontend DSA namespace."""
++    """Lazily import the HCU (hip_dsa) DSA namespace.
++
++    Only the namespace source changes: it is still cached in ``_cudnn_dsa``, so
++    every ``_cudnn_dsa.<op>`` call site in this module is untouched.
++    """
+     global _cudnn_dsa
+     if _cudnn_dsa is not None:
+         return
+     try:
+-        from cudnn import DSA as _ns
++        from hip_dsa import DSA as _ns
+     except ImportError as e:
+         raise ImportError(
+-            "cudnn-frontend DSA namespace not available. Install with "
+-            "`pip install nvidia-cudnn-frontend[cutedsl]`."
++            "hip_dsa DSA namespace not available. Install the hip_dsa package."
+         ) from e
+     _cudnn_dsa = _ns
+ 
+diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
+index 0861268..3a8e8b6 100644
+--- a/megatron/core/transformer/transformer_config.py
++++ b/megatron/core/transformer/transformer_config.py
+@@ -2061,7 +2061,7 @@ class TransformerConfig(ModelParallelConfig):
+                         "this path. Use sparse indexer loss or set dsa_kernel_backend='none'."
+                     )
+ 
+-                from cudnn import DSA
++                from hip_dsa import DSA
+ 
+                 if sm[0] >= 10 and uses_ratio4_indexer:
+                     compact_wrapper = getattr(DSA, "indexer_forward_top_k_wrapper", None)
+diff --git a/megatron/core/utils.py b/megatron/core/utils.py
+index a3eaefc..5ccba70 100644
+--- a/megatron/core/utils.py
++++ b/megatron/core/utils.py
+@@ -514,9 +514,9 @@ def _missing_cudnn_dsa_kernel_dependencies() -> List[str]:
+     except ImportError:
+         missing.append("flash_mla " "(https://github.com/deepseek-ai/FlashMLA/tree/nv_dev)")
+     try:
+-        from cudnn import DSA  # noqa: F401
++        from hip_dsa import DSA as _ns  # noqa: F401
+     except ImportError:
+-        missing.append("cudnn-frontend DSA (nvidia-cudnn-frontend[cutedsl])")
++        missing.append("HIP DSA (hip_dsa)")
+     return missing
+ 
+ 

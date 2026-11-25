@@ -135,96 +135,118 @@ with open('video.json', 'w', encoding='utf-8') as f:
 > └—— ...(code files)
 > ```
 
-### modify multisource yaml
-
-Modify `configs/multimodal/data/tulu_sharegpt4v_llavavideo.yaml`:
-
-```yaml
-sources:
-- sharegpt4v_instruct_gpt4-vision_cap100k_coco.json
-- tulu-3-sft-mixture/data
-- video.json
-names:
-- sharegpt4v_captioner_sft
-- tulu-3-sft-mixture
-- LLaVA-Video-178K
-schedule:
-- schedule_type: const
-  weights: [0.4, 0.2, 0.4]
-```
-
-## Start training on GPU/NPU
-
-```shell
-bash train.sh tasks/train_vlm.py configs/multimodal/qwen3_omni/qwen3_omni.yaml \
-    --model.model_path Qwen3-Omni-30B-A3B-Instruct
-```
-
-> **Note.** VeOmni's runtime `CheckpointTensorConverter` folds per-expert HF
-> safetensor keys into VeOmni's fused `gate_up_proj` / `down_proj` layout at
-> load time, so the stock HF checkpoint can be passed directly to training —
-> no offline merge step is required. See
-> `docs/transformers_v5/transformers_v5_moe_weight_loading.md` for the full
-> format matrix and how to convert a VeOmni-format training checkpoint back
-> to per-expert HF keys for inference engines.
->
-> `scripts/moe_ckpt_merge/moe_merge.py` is deprecated. It still works and may
-> be useful as a one-time optimization for very large checkpoints (e.g.
-> Qwen3-235B) where you want to amortize the per-load stacking cost across
-> many runs, but it is no longer a prerequisite.
-
-## 在 ms-swift (Megatron-SWIFT) 中训练
-
-VeOmni 处理好的数据可以直接给 ms-swift 使用：`--dataset` 支持本地 json /
-parquet 目录，媒体相对路径通过 `ROOT_IMAGE_DIR` 解析。唯一需要额外处理的是
-LLaVA-Video 的标注：它用 `<image>` 作为视频占位符，而 ms-swift 按媒体类型分发
-占位符（`videos` 字段只替换 `<video>`），所以要先转换出 `video_swift.json`：
+VeOmni 处理好的数据可以直接给 ms-swift 使用：`--dataset` 支持本地 json / parquet 目录，媒体相对路径通过 `ROOT_IMAGE_DIR` 解析。唯一需要额外处理的是LLaVA-Video 的标注：它用 `<image>` 作为视频占位符，而 ms-swift 按媒体类型分发占位符（`videos` 字段只替换 `<video>`），所以要先转换出 `video_swift.json`：
 
 ```bash
 cd examples/qwen3_omni
-python prepare_data.py --data_dir /public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni
+python prepare_data.py --data_dir path/to/VeOmni
 ```
 
-三个数据集对应 VeOmni 的 `tulu_sharegpt4v_llavavideo.yaml`：
-
+三个数据集对应 VeOmni 的设置：
 | 数据 | 文件 | 默认采样 |
 |---|---|---|
 | ShareGPT4V caption | `sharegpt4v_instruct_gpt4-vision_cap100k_coco.json` | 10000 |
 | tulu-3-sft-mixture | `tulu-3-sft-mixture/data`（parquet 目录） | 5000 |
 | LLaVA-Video | `video_swift.json` | 5753（全量） |
 
-采样条数可通过 `SHAREGPT4V_N` / `TULU_N` / `VIDEO_N` 调整。要严格复现 VeOmni
-的 0.4 / 0.2 / 0.4 配比，可设置 `SHAREGPT4V_N=5753 TULU_N=2877`（视频全量）。
+采样条数可通过 `SHAREGPT4V_N` / `TULU_N` / `VIDEO_N` 调整。默认为 VeOmni的 0.4 / 0.2 / 0.4 配比，可设置 `SHAREGPT4V_N=10000 TULU_N=5000 VIDEO_N=5753`。
 
-单机 8 卡 LoRA（推荐）：
-
+## 启动训练
+镜像中可能会缺些依赖, 手动装上就行
 ```bash
-cd examples/qwen3_omni
-DATA_DIR=/public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni \
-    bash train_qwen3_omni_lora.sh 1 127.0.0.1 \
-    /public/home/wangxj3/Downloads/model_datasets/models/Qwen3-Omni-30B-A3B-Instruct
+pip install qwen_omni_utils
+pip install audioread
+pip install decord   # 视频解码；缺了它视频样本会被丢弃（容器里的 torchvision 没编译 read_video）
 ```
 
-多机（`hostfile` 每行一个节点 IP/主机名）：
+通过run_train.sh启动训练, 参数设置通常为:
+`MODEL=模型路径 DATASET=数据集路径 RCCLENV=rcclenv.sh路径 MODEL_KEY=训练脚本 bash run_train.sh hosfile路径 节点数 训练方案`
 
-```bash
-MODEL=/path/to/Qwen3-Omni-30B-A3B-Instruct \
-DATA_DIR=/path/to/VeOmni \
-    bash run_train.sh hosts.txt 2 lora
-```
+- LoRA：
+    ```bash
+    MODEL=/path/to/Qwen3-Omni-30B-A3B-Instruct DATA_DIR=/path/to/VeOmni RCCLENV=/path/to/rcclenv.sh bash run_train.sh hostfile 1 lora
+    ```
 
-全参数 SFT 把 `lora` 换成 `sft`；30B 全参显存占用较高，显存不足时请使用 LoRA。
+MODEL=/public/home/wangxj3/Downloads/model_datasets/models/Qwen3-Omni-30B-A3B-Instruct DATA_DIR=/public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni RCCLENV=/public/home/wangxj3/Projects/ms-swift-das/examples/tools/rcclenv.sh bash run_train.sh hostfile 1 lora
 
-关键参数说明：
+日志中告警信息解释:
+- 零星出现 `module 'torchvision.io' has no attribute 'read_video'`：`decord` 对个别损坏/编码不支持的视频解码失败（`DECORDError: avcodec_send_packet ...`）后回退到 torchvision 的报错，该样本会按数据集错误被丢弃（VeOmni 全量约 1% 的视频），属于坏样本，不是环境缺少依赖。
 
-- `--expert_model_parallel_size 8`：专家并行，单机 8 卡时专家均分到每张卡；
-  多机可增大到 16/32（需能整除 world_size）。LoRA 不支持 ETP>1（默认 ETP=1）。
-- `--freeze_vit true --freeze_aligner true`：冻结视觉/音频塔与 aligner，只训练 LLM。
-- `ENABLE_AUDIO_OUTPUT=0`：只训练 thinker，不加载 talker / code2wav。
-- `IMAGE_MAX_TOKEN_NUM` / `VIDEO_MAX_TOKEN_NUM` / `FPS_MAX_FRAMES`：控制图像/视频
-  的 token 数与抽帧数；视频较长或显存紧张时调小。
-- `--packing true --max_length 4096`：变长打包，超过 `max_length` 的样本默认丢弃
-  （`truncation_strategy=delete`）。
-- LoRA 目标模块 `all-linear` 已覆盖 MoE 专家（grouped GEMM），默认不含 router；
-  需要训练 router 时改成 `--target_modules all-router all-linear`。
-- 训练完成后合并权重：`megatron export --merge_lora true ...`。
+- `[transformers] Qwen2VL video processing does not apply the per-frame pixel cap ...` 是transformers 的提示：ms-swift 读取视频时已按参考实现（qwen-vl-utils 的 `VIDEO_MAX_PIXELS`）对每帧做过 resize，这里不再 cap 也不会多耗 token，可忽略。
+
+
+## 简单调参
+ms-swift自有参数和megatron-lm参数相互搭配组合, 
+- ms-swift在swift/megatron/arguments/megatron_args.py中定义参数
+- 对于没有定义的, 可以通过megatron_extra_kwargs直接映射到transformerconfig
+
+常见的参数设置方法如下所示:
+
+- 切分配置相关参数
+    ```python
+    --tensor_model_parallel_size 1
+    --sequence_parallel true
+    --context_parallel_size 1
+    --pipeline_model_parallel_size 1
+    --expert_model_parallel_size 1
+    --expert_tensor_parallel_size 1
+    ```
+- 显存优化相关参数
+    ```python
+    # offload
+    # 用于sft/pretrain
+    --optimizer_cpu_offload true 
+    --optimizer_offload_fraction 1.0 
+    --use_precision_aware_optimizer true
+    # 用于grpo/gkd等 rollout 场景
+    --offload_optimizer true
+    --offload_mode true
+    --offload_bridge true # 仅 GRPO/GKD：导出的 HF 权重放 CPU 主存
+    --offload_teacher_model true # 仅 GKD：teacher 放 CPU
+
+    # recompute
+    --recompute_granularity full # selective 配合--recompute_modules, 默认 core_attn；另有 moe_act layernorm mla_up_proj mlp moe
+    --recompute_method uniform # uniform / block 
+    --recompute_num_layers 1 #需要被整除
+    --mhc_recompute_layer_num 1 # 仅dsv4的mhc
+
+    # 分布式ddp优化器
+    --use_distributed_optimizer true
+
+    ```
+- 性能优化相关参数
+    ```python
+    --overlap_grad_reduce true 
+    --attention_backend flash
+    --moe_permute_fusion true 
+    --moe_grouped_gemm true 
+    --moe_shared_expert_overlap true 
+    --moe_aux_loss_coeff 1e-6 
+    --megatron_extra_kwargs '{"moe_router_fusion": true,}' # 无语义校验，绕过检查, 字段名必须在 mcore 里存在, 给 swift 没暴露的 mcore 字段开口子
+    ```
+- 数据集配置相关参数
+    ```python
+    --finetune #断点续训
+    --max_length 8192 #最大的seq, 超出会截断
+    --packing true
+    --truncation_strategy #对于超长数据处理: delete(默认, 跳过数据), left留末尾丢开头, right留开头丢末尾, split(切成多个batch, 只能pretrain用)
+    --streaming true # 流式, 配合train_iter使用
+    --split_dataset_ratio 0.01 #未设置--val_dataset时从训练集中抽部分做eval
+    --system # 给样本加上system prompt, 在样本没有system字段时补上.
+    --add_non_thinking_prefix true #对于没有think数据集, 自动补上一个空的think的标识
+    --loss_scale ignore_empty_think  #将空think块的loss权重设置为0. 可选参数:
+        # - default: SFT, 只对 assistant 回复算 loss（含历史轮，权重 1）；system/user/多模态 token 不算	
+        # - last_round: RLHF（DPO/GRPO 等）, 只对最后一轮 assistant 回复算 loss（最后一个 user 之后的内容）
+        # - all: swift pt, 所有 token 都算 loss，包括 system/user
+    --dataloader_pin_memory false # 数据加载内存锁定, 开启后可能导致内存oom
+    ```
+- 训练方案相关参数
+    ```python
+    --tuner_type full #可选 full(全参训练) / lora(冻结基座) / lora_llm(只对llm)
+        # - lora时: --target_modules [all-linear]在指定层使用低秩矩阵, --lora_rank/--lora_alpha 输出adapter, --merge_lora 控制导出时是否合并
+        # - lora_llm时: merge_lora=true
+
+    --num_train_epochs # 训练集过几遍, 会覆盖train_iters
+    --language_model_only true # 多模态模型只跑文本模型
+    # 加载vit但是只训练纯文本: --language_model_only false, --freeze_vit true, --freeze_llm false, freeze_aligner true
+    ```

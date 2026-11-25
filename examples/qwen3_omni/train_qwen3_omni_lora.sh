@@ -34,20 +34,14 @@ SHAREGPT4V_N=${SHAREGPT4V_N:-10000}
 TULU_N=${TULU_N:-5000}
 VIDEO_N=${VIDEO_N:-5753}
 
-# 集群环境（DTK / RCCL），按实际路径修改
-if [ -f /opt/dtk/env.sh ]; then
-    source /opt/dtk/env.sh
-fi
-RCCLENV=${RCCLENV:-/cfs/megatron-code/ms-swift/env.sh}
-if [ -f "${RCCLENV}" ]; then
-    source "${RCCLENV}"
-fi
+source /opt/dtk/env.sh
+source "${RCCLENV}"
 
 # HCU 环境建议，参考 ms-swift/docs/source/BestPractices/AMD-support.md
 export GPU_MAX_HW_QUEUES=4
 export NVTE_USE_HIPBLASLT_GROUPEDGEMM=1
 export HSA_NO_SCRATCH_RECLAIM=1
-# 相对路径的多媒体文件以 DATA_DIR 为根
+# 相对路径的多媒体文件以 DATA_DIR 为根, ms-swift会自动读取(ms-swift/swift/template/base.py#L227)
 export ROOT_IMAGE_DIR="${DATA_DIR}"
 
 PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True' \
@@ -70,6 +64,11 @@ megatron sft \
               "${DATA_DIR}/video_swift.json#${VIDEO_N}" \
     --load_from_cache_file true \
     --split_dataset_ratio 0.01 \
+    --max_length 4096 \
+    --packing true \
+    --dataloader_num_workers 8 \
+    --dataset_num_proc 8 \
+    --dataloader_pin_memory false \
     --tuner_type lora \
     --lora_rank 8 \
     --lora_alpha 32 \
@@ -78,27 +77,25 @@ megatron sft \
     --freeze_llm false \
     --freeze_vit true \
     --freeze_aligner true \
+    --sequence_parallel true \
     --expert_model_parallel_size 8 \
-    --moe_permute_fusion true \
-    --moe_grouped_gemm true \
-    --moe_shared_expert_overlap true \
-    --moe_aux_loss_coeff 1e-3 \
     --micro_batch_size 1 \
     --global_batch_size 8 \
+    --train_iters 20 \
     --recompute_granularity full \
     --recompute_method uniform \
     --recompute_num_layers 1 \
-    --num_train_epochs 1 \
     --cross_entropy_loss_fusion true \
     --lr 1e-4 \
     --lr_warmup_fraction 0.05 \
     --min_lr 1e-5 \
-    --packing true \
-    --sequence_parallel true \
     --attention_backend flash \
-    --max_length 4096 \
-    --dataloader_num_workers 8 \
-    --dataset_num_proc 8 \
+    --moe_permute_fusion true \
+    --moe_grouped_gemm true \
+    --moe_shared_expert_overlap true \
+    --moe_aux_loss_coeff 1e-3 \
+    --megatron_extra_kwargs '{"moe_router_fusion": true,}' \
+    --logging_steps 1 \
     --no_save_optim true \
     --no_save_rng true \
     --output_dir ${OUTPUT_DIR}

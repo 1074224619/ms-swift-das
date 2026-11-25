@@ -56,8 +56,7 @@ def convert_video_json(data_dir: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--data_dir',
-        default=os.environ.get('DATA_DIR') or '/public/home/wangxj3/Downloads/model_datasets/datasets/VeOmni',
+        '--data_dir', default='VeOmni',
         help='VeOmni 数据集目录 (包含 video.json / coco / academic_source)')
     args = parser.parse_args()
     convert_video_json(args.data_dir)

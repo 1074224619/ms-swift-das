@@ -1,0 +1,81 @@
+# Rebased for tastelikefeet/Megatron-LM dsv41-pr7224-engram-local (827e940e6).
+# Original: megatron_hip_mhc.patch (generated against tastelikefeet/Megatron-LM main).
+# Apply from the Megatron-LM repo root: git apply megatron_hip_mhc_dsv41.patch
+diff --git a/megatron/core/fusions/fused_mhc_kernels.py b/megatron/core/fusions/fused_mhc_kernels.py
+index cf6835a..bcb93db 100644
+--- a/megatron/core/fusions/fused_mhc_kernels.py
++++ b/megatron/core/fusions/fused_mhc_kernels.py
+@@ -94,6 +94,23 @@ except ImportError:
+     pass
+ 
+ 
++# ---------------------------------------------------------------------------
++# Check HIP (fused_mhc) availability
++# ---------------------------------------------------------------------------
++_HIP_AVAILABLE = False
++try:
++    from fused_mhc import (
++        FusedSinkhorn as HipFusedSinkhorn,
++        FusedHAggregate as HipFusedHAggregate,
++        FusedHPostBDA as HipFusedHPostBDA,
++        FusedProjRmsComputeH as HipFusedProjRmsComputeH,
++    )
++
++    _HIP_AVAILABLE = True
++except ImportError:
++    pass
++
++
+ _MHC_FORCED_BACKEND, _MHC_BACKEND_VALIDATION_ERROR = _forced_backend()
+ 
+ 
+@@ -211,6 +228,11 @@ def is_triton_available() -> bool:
+     return _TRITON_AVAILABLE
+ 
+ 
++def is_hip_available() -> bool:
++    """Return True if the HIP fused mHC kernels are enabled."""
++    return _HIP_AVAILABLE
++
++
+ # ============================================================================
+ # Triton implementations (only defined when triton is available)
+ # ============================================================================
+@@ -3117,6 +3139,8 @@ def fused_sinkhorn(input_logits: Tensor, num_iterations: int, eps: float = 1e-6)
+     _raise_mhc_backend_validation_error()
+     if not input_logits.is_cuda or input_logits.numel() == 0:
+         return native_sinkhorn(input_logits, num_iterations, eps)
++    if is_hip_available():
++        return HipFusedSinkhorn.apply(input_logits, num_iterations, eps)
+     triton_sinkhorn = _get_triton_sinkhorn()
+     if triton_sinkhorn is not None:
+         return triton_sinkhorn(input_logits, num_iterations, eps)
+@@ -3128,6 +3152,8 @@ def fused_sinkhorn(input_logits: Tensor, num_iterations: int, eps: float = 1e-6)
+ def fused_h_aggregate(x: Tensor, h_pre: Tensor) -> Tensor:
+     """Weighted n-stream to 1-stream aggregation using Triton/cuTile/torch."""
+     _raise_mhc_backend_validation_error()
++    if is_hip_available() and x.is_cuda and x.numel():
++        return HipFusedHAggregate.apply(x, h_pre)
+     if x.is_cuda and x.numel() and (_TRITON_AVAILABLE or is_cutile_available()):
+         return FusedHAggregate.apply(x, h_pre)
+     return native_h_aggregate(x, h_pre)
+@@ -3148,6 +3174,8 @@ def fused_h_post_bda(
+ ) -> Tensor:
+     """Fused H_res.T @ residual + H_post * (x + bias)."""
+     _raise_mhc_backend_validation_error()
++    if is_hip_available() and x.is_cuda and x.numel():
++        return HipFusedHPostBDA.apply(h_res, original_residual, h_post, x, bias)
+     if x.is_cuda and x.numel() and (_TRITON_AVAILABLE or is_cutile_available()):
+         return FusedHPostBDA.apply(h_res, original_residual, h_post, x, bias)
+     return native_h_post_bda(h_res, original_residual, h_post, x, bias)
+@@ -3173,6 +3201,10 @@ def fused_proj_rms_compute_h(
+     RMS and epsilon is added after the square root, preserving legacy mHC.
+     """
+     _raise_mhc_backend_validation_error()
++    if is_hip_available() and not eps_inside_sqrt and x.is_cuda and x.numel():
++        return HipFusedProjRmsComputeH.apply(
++            x, weight, alpha_pre, alpha_post, alpha_res, bias, n, eps, compute_h_eps
++        )
+     if x.is_cuda and x.numel() and is_cutile_available():
+         return CutileProjRmsComputeH.apply(
+             x,
